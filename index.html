@@ -5393,10 +5393,12 @@ let _preplyCards = [];
 
 function buildPreplyMessage(prompt, textInput) {
   const files = Array.isArray(_preplyFileData) ? _preplyFileData : (_preplyFileData ? [_preplyFileData] : []);
-  
-  if (files.length > 0) {
+  const hasFiles = files.length > 0;
+  const hasText = textInput && textInput.trim().length > 0;
+
+  if (hasFiles) {
     const msgContent = [];
-    // Max 5 files to avoid token limits
+    // Add ALL files (max 5)
     const filesToSend = files.slice(0, 5);
     for (const f of filesToSend) {
       try {
@@ -5407,15 +5409,16 @@ function buildPreplyMessage(prompt, textInput) {
         }
       } catch(e) { console.warn('[Preply] Skipping file:', f.name, e); }
     }
-    if (msgContent.length === 0) {
-      // All files failed - fall back to text only
-      return prompt + (textInput ? '\n\nLernnotizen: "' + textInput + '"' : '');
-    }
-    const txt = textInput ? '\n\nZusätzliche Notizen: "' + textInput + '"' : '';
-    msgContent.push({ type: 'text', text: prompt + txt });
-    return msgContent;
+    // ALWAYS add text too (both text AND files, not either/or)
+    const textPart = hasText
+      ? prompt + '\n\nZusätzliche Notizen von der Schülerin: "' + textInput + '"'
+      : prompt;
+    msgContent.push({ type: 'text', text: textPart });
+    return msgContent.length > 1 ? msgContent : textPart; // fallback if no files loaded
   }
-  return prompt + (textInput ? '\n\nLernnotizen: "' + textInput + '"' : '');
+
+  // Text only
+  return prompt + (hasText ? '\n\nLernnotizen: "' + textInput + '"' : '');
 }
 
 async function generatePreplyCards() {
@@ -5456,7 +5459,11 @@ Wichtig:
 - Nur JSON zurückgeben, kein anderer Text`;
 
   try {
-    const ANTHROPIC_KEY = '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'; // ← Ersetze mit deinem Key von console.anthropic.com
+    // Check if we're on HTTPS (required for API calls)
+    if (location.protocol === 'file:') {
+      throw new Error('Bitte App über HTTPS öffnen (GitHub Pages / Netlify) – nicht als lokale Datei');
+    }
+    const ANTHROPIC_KEY = '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';
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
