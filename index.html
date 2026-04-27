@@ -5396,26 +5396,38 @@ function buildPreplyMessage(prompt, textInput) {
   
   if (files.length > 0) {
     const msgContent = [];
-    // Add all files
-    for (const f of files) {
-      if (f.type === 'image') {
-        msgContent.push({ type: 'image', source: { type: 'base64', media_type: f.mediaType, data: f.data } });
-      } else if (f.type === 'pdf') {
-        msgContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: f.data } });
-      }
+    // Max 5 files to avoid token limits
+    const filesToSend = files.slice(0, 5);
+    for (const f of filesToSend) {
+      try {
+        if (f.type === 'image') {
+          msgContent.push({ type: 'image', source: { type: 'base64', media_type: f.mediaType || 'image/jpeg', data: f.data } });
+        } else if (f.type === 'pdf') {
+          msgContent.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: f.data } });
+        }
+      } catch(e) { console.warn('[Preply] Skipping file:', f.name, e); }
     }
-    const txt = textInput ? `\n\nZusätzliche Notizen: "${textInput}"` : '';
+    if (msgContent.length === 0) {
+      // All files failed - fall back to text only
+      return prompt + (textInput ? '\n\nLernnotizen: "' + textInput + '"' : '');
+    }
+    const txt = textInput ? '\n\nZusätzliche Notizen: "' + textInput + '"' : '';
     msgContent.push({ type: 'text', text: prompt + txt });
     return msgContent;
   }
-  return prompt + `\n\nLernnotizen: "${textInput}"`;
+  return prompt + (textInput ? '\n\nLernnotizen: "' + textInput + '"' : '');
 }
 
 async function generatePreplyCards() {
   const input = document.getElementById('preplyInput').value.trim();
-  if ((!input || input.length < 5) && !_preplyFileData) {
+  if ((!input || input.length < 5) && (!_preplyFileData || !_preplyFileData.length)) {
     document.getElementById('preplyStatus').textContent = '⚠️ Bitte Text eingeben oder Datei hochladen.';
     return;
+  }
+  // Limit to 2 files max to avoid API limits
+  if (Array.isArray(_preplyFileData) && _preplyFileData.length > 2) {
+    _preplyFileData = _preplyFileData.slice(0, 2);
+    status.textContent = '⚠️ Max. 2 Dateien – nur die ersten 2 werden verwendet.';
   }
   const btn = document.getElementById('preplyBtn');
   const status = document.getElementById('preplyStatus');
@@ -5455,15 +5467,31 @@ Wichtig:
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1500,
+        max_tokens: 2000,
         messages: [{ role: 'user', content: buildPreplyMessage(basePrompt, input) }]
       })
     });
     const data = await resp.json();
+
+    // Handle API errors
+    if (data.error) {
+      throw new Error(data.error.message || JSON.stringify(data.error));
+    }
+    if (!data.content || !Array.isArray(data.content)) {
+      console.error('Unexpected API response:', JSON.stringify(data).slice(0,300));
+      throw new Error('Unerwartete API-Antwort: ' + JSON.stringify(data).slice(0,100));
+    }
+
     const text = data.content.map(c => c.text || '').join('');
     // Strip any markdown fences
     const clean = text.replace(/```json|```/g, '').trim();
-    const cards = JSON.parse(clean);
+    let cards;
+    try {
+      cards = JSON.parse(clean);
+    } catch(parseErr) {
+      console.error('JSON parse error:', clean.slice(0,200));
+      throw new Error('Konnte Antwort nicht verarbeiten – versuche weniger Dateien');
+    }
 
     _preplyCards = cards.map(c => ({...c, scenario: 'preply_custom'}));
 
